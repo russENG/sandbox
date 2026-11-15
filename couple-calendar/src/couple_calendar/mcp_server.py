@@ -39,6 +39,11 @@ def build_instructions(settings: Settings) -> str:
         f"日時はタイムゾーン {settings.timezone} で扱います。相対的な日付は get_calendar_info の現在日時から計算してください。",
         "予定を変更・削除するときは、先に list_events で対象の id を調べ、候補が複数あれば利用者に確認してください。",
     ]
+    if any(m.work_calendar_id for m in settings.members):
+        lines.append(
+            "仕事のカレンダーの出張・移動を共有カレンダーに写すように頼まれたら、list_work_events で読み、"
+            "その説明のルールに従って create_event で登録してください。期間の指定がなければ今日から8週間先までです。"
+        )
     if me:
         lines.append(f"このClaude Codeの利用者は{me}さんです。「私の予定」は{me}さんの予定として扱ってください。")
     return "\n".join(lines)

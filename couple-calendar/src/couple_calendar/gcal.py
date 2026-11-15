@@ -12,10 +12,11 @@ from datetime import date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from .config import BOTH, Settings
+from .config import BOTH, Member, Settings
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 OWNER_PROP = "coupleOwner"
+WORK_PROP = "workEventId"  # 仕事のカレンダーから写した予定の、元の予定ID
 WEEKDAYS = "月火水木金土日"
 MAX_EVENTS = 500
 
@@ -145,7 +146,7 @@ class CoupleCalendar:
 
     # ------------------------------------------------------------------ API 呼び出し
 
-    def _execute(self, request: Any) -> Any:
+    def _execute(self, request: Any, forbidden: str | None = None) -> Any:
         from googleapiclient.errors import HttpError
 
         try:
@@ -156,7 +157,8 @@ class CoupleCalendar:
                 raise CalendarError("予定が見つかりませんでした（すでに削除されたか、IDが違います）。") from e
             if status == 403:
                 raise CalendarError(
-                    "カレンダーへのアクセス権がありません。共有カレンダーの共有設定で、"
+                    forbidden
+                    or "カレンダーへのアクセス権がありません。共有カレンダーの共有設定で、"
                     "サービスアカウントに「予定の変更」権限を付けてください。"
                 ) from e
             raise CalendarError(f"Googleカレンダーでエラーが発生しました（{status}）: {e}") from e
@@ -203,17 +205,15 @@ class CoupleCalendar:
             return s, max(e, s + timedelta(days=1))
         return self.parse_datetime(start["dateTime"]), self.parse_datetime(end["dateTime"])
 
-    def summarize(self, event: dict) -> dict:
+    def summarize(self, event: dict, with_owner: bool = True) -> dict:
         """モデルや人が読みやすい形に整える。終日予定の end は「最終日」（その日を含む）で返す。"""
         start = event.get("start", {})
         all_day = "date" in start
         s, e = self.event_bounds(event)
-        out: dict[str, Any] = {
-            "id": event.get("id"),
-            "title": event.get("summary") or "(タイトルなし)",
-            "owner": self.settings.owner_label(self.detect_owner(event)),
-            "all_day": all_day,
-        }
+        out: dict[str, Any] = {"id": event.get("id"), "title": event.get("summary") or "(タイトルなし)"}
+        if with_owner:
+            out["owner"] = self.settings.owner_label(self.detect_owner(event))
+        out["all_day"] = all_day
         if all_day:
             last = (e - timedelta(days=1)).date()
             out["start"] = s.date().isoformat()
@@ -231,15 +231,25 @@ class CoupleCalendar:
             out["recurring"] = True
         if event.get("transparency") == "transparent":
             out["busy"] = False
+        if ((event.get("extendedProperties") or {}).get("private") or {}).get(WORK_PROP):
+            out["from_work"] = True
         return out
 
     # ------------------------------------------------------------------ 操作
 
-    def list_events(self, start: date, end: date, keyword: str | None = None) -> list[dict]:
+    def list_events(
+        self,
+        start: date,
+        end: date,
+        keyword: str | None = None,
+        *,
+        calendar_id: str | None = None,
+        forbidden: str | None = None,
+    ) -> list[dict]:
         if end < start:
             raise CalendarError("終了日が開始日より前になっています。")
         params: dict[str, Any] = {
-            "calendarId": self.settings.calendar_id,
+            "calendarId": calendar_id or self.settings.calendar_id,
             "timeMin": self.day_start(start).isoformat(),
             "timeMax": self.day_start(end + timedelta(days=1)).isoformat(),
             "singleEvents": True,
@@ -250,7 +260,7 @@ class CoupleCalendar:
             params["q"] = keyword
         items: list[dict] = []
         while True:
-            resp = self._execute(self._events().list(**params))
+            resp = self._execute(self._events().list(**params), forbidden)
             items.extend(resp.get("items", []))
             token = resp.get("nextPageToken")
             if not token or len(items) >= MAX_EVENTS:
@@ -260,6 +270,37 @@ class CoupleCalendar:
 
     def get_event(self, event_id: str) -> dict:
         return self._execute(self._events().get(calendarId=self.settings.calendar_id, eventId=event_id))
+
+    def list_work_events(self, member: Member, start: date, end: date, keyword: str | None = None) -> list[dict]:
+        """仕事のカレンダー（読み取りのみ）の予定。自分が欠席と答えた予定は除く。"""
+        if not member.work_calendar_id:
+            raise CalendarError(f"{member.name}さんの仕事のカレンダーが設定されていません（MEMBERx_WORK_CALENDAR_ID）。")
+        events = self.list_events(
+            start,
+            end,
+            keyword,
+            calendar_id=member.work_calendar_id,
+            forbidden=(
+                f"{member.name}さんの仕事のカレンダーを読めません。仕事のカレンダーの共有設定で、"
+                "サービスアカウントに「予定の表示（すべての予定の詳細）」を付けてください。"
+            ),
+        )
+        declined = lambda ev: any(  # noqa: E731
+            a.get("self") and a.get("responseStatus") == "declined" for a in ev.get("attendees", [])
+        )
+        return [ev for ev in events if not declined(ev)]
+
+    def find_copied_work_event(self, work_event_id: str) -> dict | None:
+        """仕事のカレンダーから写した予定を、元の予定IDで探す（二重登録を防ぐため）。"""
+        resp = self._execute(
+            self._events().list(
+                calendarId=self.settings.calendar_id,
+                privateExtendedProperty=f"{WORK_PROP}={work_event_id}",
+                maxResults=5,
+            )
+        )
+        items = [i for i in resp.get("items", []) if i.get("status") != "cancelled"]
+        return items[0] if items else None
 
     def create_event(
         self,
@@ -273,13 +314,21 @@ class CoupleCalendar:
         memo: str | None = None,
         repeat_rule: str | None = None,
         busy: bool | None = None,
-    ) -> dict:
+        work_event_id: str | None = None,
+    ) -> tuple[dict, bool]:
+        """予定を登録して (予定, 新しく作ったか) を返す。
+
+        work_event_id（仕事のカレンダーの元の予定ID）を付けると、同じ予定を前に写していればそれを上書きする。
+        """
         if not title.strip():
             raise CalendarError("予定のタイトルが空です。")
+        private = {OWNER_PROP: owner_key}
+        if work_event_id:
+            private[WORK_PROP] = work_event_id
         body: dict[str, Any] = {
             "summary": title.strip(),
             "colorId": self.color_for(owner_key),
-            "extendedProperties": {"private": {OWNER_PROP: owner_key}},
+            "extendedProperties": {"private": private},
         }
         if all_day or self.is_date_only(start):
             first = self.parse_date(start)
@@ -309,7 +358,13 @@ class CoupleCalendar:
         if repeat_rule:
             rule = repeat_rule.strip()
             body["recurrence"] = [rule if rule.upper().startswith("RRULE:") else f"RRULE:{rule}"]
-        return self._execute(self._events().insert(calendarId=self.settings.calendar_id, body=body))
+        existing = self.find_copied_work_event(work_event_id) if work_event_id else None
+        if existing:
+            updated = self._execute(
+                self._events().update(calendarId=self.settings.calendar_id, eventId=existing["id"], body=body)
+            )
+            return updated, False
+        return self._execute(self._events().insert(calendarId=self.settings.calendar_id, body=body)), True
 
     def update_event(
         self,
@@ -395,22 +450,26 @@ class CoupleCalendar:
                 continue
             busy.append(self.event_bounds(event))
 
-        personal = [
-            m for m in self.settings.members if m.key in owner_keys and m.personal_calendar_id
+        others = [  # (メンバー, カレンダーID, 呼び名)
+            (m, cid, label)
+            for m in self.settings.members
+            if m.key in owner_keys
+            for cid, label in ((m.personal_calendar_id, "個人"), (m.work_calendar_id, "仕事"))
+            if cid
         ]
-        if personal:
+        if others:
             body = {
                 "timeMin": self.day_start(start).isoformat(),
                 "timeMax": self.day_start(end + timedelta(days=1)).isoformat(),
                 "timeZone": self.settings.timezone,
-                "items": [{"id": m.personal_calendar_id} for m in personal],
+                "items": [{"id": cid} for _, cid, _ in others],
             }
             resp = self._execute(self.service.freebusy().query(body=body))
             calendars = resp.get("calendars", {})
-            for m in personal:
-                info = calendars.get(m.personal_calendar_id, {})
+            for m, cid, label in others:
+                info = calendars.get(cid, {})
                 if info.get("errors"):
-                    notes.append(f"{m.name}さんの個人カレンダーを参照できませんでした（共有設定を確認してください）。")
+                    notes.append(f"{m.name}さんの{label}のカレンダーを参照できませんでした（共有設定を確認してください）。")
                 for b in info.get("busy", []):
                     busy.append((self.parse_datetime(b["start"]), self.parse_datetime(b["end"])))
         return busy, notes

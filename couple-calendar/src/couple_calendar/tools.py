@@ -72,6 +72,7 @@ def build_tools(cal: CoupleCalendar) -> list[Callable[..., str]]:
         memo: str | None = None,
         repeat_rule: str | None = None,
         busy: bool | None = None,
+        work_event_id: str | None = None,
     ) -> str:
         """共有カレンダーに予定を登録する。
 
@@ -85,8 +86,9 @@ def build_tools(cal: CoupleCalendar) -> list[Callable[..., str]]:
             memo: メモ（任意）。
             repeat_rule: 繰り返しの RRULE（任意）。例: 毎週火曜 = FREQ=WEEKLY;BYDAY=TU、毎月10日 = FREQ=MONTHLY;BYMONTHDAY=10。
             busy: 空き時間検索で「ふさがっている」とみなすか。省略時は、時刻ありの予定は true、終日予定は false。旅行など終日でふさがる予定は true にする。
+            work_event_id: 仕事のカレンダーから写す予定なら、list_work_events で得た元の予定の id。前に写した予定があれば、新しく作らずに上書きする。
         """
-        event = cal.create_event(
+        event, created = cal.create_event(
             title=title,
             start=start,
             end=end,
@@ -96,8 +98,48 @@ def build_tools(cal: CoupleCalendar) -> list[Callable[..., str]]:
             memo=memo,
             repeat_rule=repeat_rule,
             busy=busy,
+            work_event_id=work_event_id,
         )
-        return _json({"created": cal.summarize(event)})
+        return _json({"created" if created else "updated_existing": cal.summarize(event)})
+
+    def list_work_events(
+        start_date: str, end_date: str, who: str | None = None, keyword: str | None = None
+    ) -> str:
+        """仕事のカレンダー（読み取りのみ）の予定を一覧する。出張・移動を共有カレンダーに写すときに使う。
+
+        写すのは、出張・前泊・移動（新幹線・飛行機など）のように家を空けたり帰りが遅くなったりする予定だけにする。
+        ふつうの会議や打ち合わせは写さない。写すときは、取引先名・会議の中身・URL などの仕事の情報は書かず、
+        タイトルは「出張（大阪）」「移動（東京→新大阪）」のように、場所と時間が分かる程度にする。
+        create_event には owner にその人、work_event_id に元の予定の id を渡す（二重登録を防ぐ）。
+        何日かにわたる出張は、終日予定・busy=true で登録する。
+
+        Args:
+            start_date: 開始日 (YYYY-MM-DD)。この日を含む。
+            end_date: 終了日 (YYYY-MM-DD)。この日を含む。
+            who: 誰の仕事のカレンダーか（メンバーの名前）。省略時は、設定されている全員分。
+            keyword: タイトルなどで絞り込むキーワード（任意）。
+        """
+        first, last = cal.parse_date(start_date), cal.parse_date(end_date)
+        if (last - first).days > MAX_LIST_DAYS:
+            raise CalendarError(f"一度に見られるのは {MAX_LIST_DAYS} 日分までです。期間を短くしてください。")
+        if who:
+            key = _owner(who)
+            member = settings.member_by_key(key)
+            if member is None:
+                raise CalendarError("仕事のカレンダーは、メンバーの名前で指定してください。")
+            members = [member]
+        else:
+            members = [m for m in settings.members if m.work_calendar_id]
+            if not members:
+                raise CalendarError("仕事のカレンダーが設定されていません（MEMBERx_WORK_CALENDAR_ID）。")
+        result: dict[str, Any] = {}
+        for m in members:
+            events = [cal.summarize(e, with_owner=False) for e in cal.list_work_events(m, first, last, keyword or None)]
+            entry: dict[str, Any] = {"count": len(events), "events": events[:MAX_LISTED]}
+            if events and all(e["title"] == "(タイトルなし)" for e in events):
+                entry["note"] = "予定の中身が見えません。仕事のカレンダーが「時間枠のみ」で共有されている可能性があります。"
+            result[m.name] = entry
+        return _json(result)
 
     def update_event(
         event_id: str,
@@ -204,4 +246,4 @@ def build_tools(cal: CoupleCalendar) -> list[Callable[..., str]]:
             result["notes"] = notes
         return _json(result)
 
-    return [get_calendar_info, list_events, create_event, update_event, delete_event, find_free_time]
+    return [get_calendar_info, list_events, create_event, update_event, delete_event, find_free_time, list_work_events]

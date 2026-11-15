@@ -16,6 +16,7 @@ def test_tools_are_exposed_and_callable(settings, calendar, service):
         names = {t.name for t in await server.list_tools()}
         assert names == {
             "get_calendar_info", "list_events", "create_event", "update_event", "delete_event", "find_free_time",
+            "list_work_events",
         }
         schema = next(t for t in await server.list_tools() if t.name == "create_event").input_schema
         assert schema["required"] == ["title", "start"]
@@ -37,6 +38,7 @@ def test_instructions_mention_the_user(settings):
     text = build_instructions(settings)
     assert "たろうさんとはなこさん" in text
     assert "利用者はたろうさん" in text
+    assert "list_work_events" in text  # 仕事のカレンダーが設定されているとき
 
 
 def test_setup_server_explains_missing_config():

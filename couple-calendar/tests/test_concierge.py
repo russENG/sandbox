@@ -177,3 +177,9 @@ def test_images_are_sent_before_the_text(settings, calendar):
 def test_system_prompt_covers_images_and_duplicates(settings, calendar):
     concierge = Concierge(settings, calendar, client=FakeAnthropic([]).client())
     assert "画像" in concierge.system and "二重に登録しない" in concierge.system
+
+
+def test_system_prompt_covers_work_calendar(settings, calendar):
+    concierge = Concierge(settings, calendar, client=FakeAnthropic([]).client())
+    assert "list_work_events" in concierge.system
+    assert any(t.name == "list_work_events" for t in concierge.tools)

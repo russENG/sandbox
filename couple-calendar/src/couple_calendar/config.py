@@ -27,6 +27,7 @@ class Member:
     line_user_id: str | None = None
     email: str | None = None  # Googleアカウント。カレンダーアプリで直接入れた予定の担当者判定に使う
     personal_calendar_id: str | None = None  # 個人カレンダー（空き時間検索で参照。読み取りのみ）
+    work_calendar_id: str | None = None  # 仕事のカレンダー（出張・移動の取り込みと空き時間検索で参照。読み取りのみ）
 
 
 @dataclass(frozen=True)
@@ -91,6 +92,7 @@ def _member(index: int, default_name: str, default_color: str) -> Member:
         line_user_id=_env(p + "LINE_USER_ID"),
         email=_env(p + "EMAIL"),
         personal_calendar_id=_env(p + "PERSONAL_CALENDAR_ID"),
+        work_calendar_id=_env(p + "WORK_CALENDAR_ID"),
     )
 
 
