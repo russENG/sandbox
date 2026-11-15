@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "couple-calendar": {
+      "command": "uv",
+      "args": ["run", "--directory", "couple-calendar", "couple-calendar-mcp"]
+    }
+  }
+}
