@@ -23,11 +23,55 @@
 | 登録 | 「金曜19時から21時、ふたりでディナー」「23日は結婚記念日（終日）」「毎週火曜7:30にゴミ出し」 |
 | 変更・削除 | 「ディナーを土曜に変えて」「歯医者キャンセルになった」 |
 | 空き時間探し | 「来週、ふたりとも空いてる夜は？」（各自の個人カレンダーも見られます） |
-| 朝のお知らせ（任意） | 毎朝7時に今日と明日の予定をLINEに送る |
+| 画像から登録 | 学校のお便り・チラシ・招待状・予約完了画面のスクショを送ると、日時を読み取って登録 |
+| 文章から登録 | 予定が書かれたメールやメッセージを貼り付けて送ると、そこから登録 |
 
 予定には **担当者**（夫・妻・ふたり）が付きます。担当者ごとに予定の色が変わるので、カレンダーアプリでもひと目で分かります。カレンダーアプリから直接入れた予定も、色か作成者のアカウントで担当者を見分けます。
 
-LINEでは、1対1のトークでも、夫婦＋ボットのグループトークでも使えます。グループでは「コンシェルジュ、〜」と呼びかけるか、ボットをメンションしたときだけ答えます。
+LINEでは、1対1のトークでも、夫婦＋ボットのグループトークでも使えます。
+
+- **1対1のトーク**: テキストや画像を送ると、すぐに答えます。画像を何枚かまとめて送ったときは、全部届いてから1回で読みます。
+- **グループトーク**: 「コンシェルジュ、〜」と呼びかけるか、ボットをメンションしたときだけ答えます。グループに送った画像にはその場では反応せず、15分以内に「コンシェルジュ、これ入れて」と呼びかけると、その画像を読んで登録します（家族写真などに勝手に反応しないため）。
+
+画像や文章から登録するときは、同じ日の予定を確かめてから入れるので、同じお便りを2回送っても二重には登録されません。読み取れなかった日時は登録せずに聞き返します。
+
+## LINE公式アカウント（Messaging API）の仕組み
+
+**LINE公式アカウント** は、お店や企業が使っている「ビジネス用のLINEアカウント」です。ふつうの友だちと同じように友だち追加してトークできます。今回はこれを、夫婦専用のコンシェルジュの「顔」として使います。
+
+**Messaging API** は、公式アカウントに届いたメッセージを自分のプログラムで受け取り、返事を送るための仕組みです。流れは次のとおりです。
+
+```
+ 夫・妻のLINE  --①送信-->  LINEのサーバー  --②Webhook-->  このプログラム(Cloud Run)
+                                                          ③本物のLINEからか確認
+                                                          ④画像ならLINEから本体を取得
+                                                          ⑤Claudeが考えてカレンダーを読み書き
+ 夫・妻のLINE  <--⑦表示--  LINEのサーバー  <--⑥返信API--  返信トークンを付けて送る
+```
+
+1. 夫婦がボットにテキストや画像を送ります。
+2. LINEのサーバーが、あらかじめ登録したURL（**Webhook URL**。このプログラムの `/callback`）に、メッセージの内容をJSONで送ってきます。
+3. 送られてきたデータには、**チャネルシークレット** を使った署名が付いています。プログラムはこれを確かめて、本当にLINEから来たものだけを受け付けます。
+4. 画像のとき、Webhookに入っているのは「メッセージID」だけです。プログラムがそのIDを使って、LINEのサーバーから画像の本体をダウンロードします。
+5. プログラムがClaudeに考えてもらい、Googleカレンダーを読み書きします。
+6. Webhookに付いてくる **返信トークン** と **チャネルアクセストークン** を使って返信APIを呼びます。
+7. トーク画面に返事が表示されます。
+
+鍵は2つあります。
+
+| 鍵 | 向き | 使い道 |
+| --- | --- | --- |
+| チャネルシークレット | LINE → プログラム | 届いたWebhookが本物か確かめる |
+| チャネルアクセストークン | プログラム → LINE | 返信を送る、画像をダウンロードする |
+
+メッセージの送り方も2種類あります。
+
+- **返信**: 届いたメッセージへの返事です。返信トークンは1回だけ使え、受け取ってから時間がたつと使えなくなります。**無料で、月の通数にも数えられません。**
+- **プッシュ**: プログラムから好きなときに送るメッセージです。月の無料通数（無料プランは200通）を使います。
+
+このプログラムは返信だけで動きます。考えるのに時間がかかって返信トークンが使えなかったときだけ、プッシュで届けます。
+
+グループにボットを招待すると、グループ内のメッセージもすべてWebhookで届きます。呼びかけられたときだけ答えるのは、プログラム側でそうしているためです。また、1対1のトークでは、考えている間に「…」のアニメーションを表示しています（グループではLINEの仕様で表示できません）。
 
 ---
 
@@ -95,6 +139,8 @@ Claude Code で話しかけてみてください。
 > 歯医者の予定を30分後ろにずらして
 ```
 
+Claude Code には画像も貼り付けられるので、お便りの写真を貼って「この予定を入れて」と頼むこともできます。
+
 夫婦それぞれがClaude Codeを使う場合は、各自のパソコンで同じ手順を行い、`MCP_USER_NAME` を自分の名前にします。
 
 ### 3. LINE公式アカウント（Messaging API）を作る
@@ -122,8 +168,7 @@ gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregi
 printf '%s' 'sk-ant-...'               | gcloud secrets create anthropic-api-key --data-file=-
 printf '%s' 'チャネルシークレット'        | gcloud secrets create line-channel-secret --data-file=-
 printf '%s' 'チャネルアクセストークン'    | gcloud secrets create line-channel-access-token --data-file=-
-printf '%s' "$(openssl rand -hex 24)"  | gcloud secrets create cron-secret --data-file=-
-for s in anthropic-api-key line-channel-secret line-channel-access-token cron-secret; do
+for s in anthropic-api-key line-channel-secret line-channel-access-token; do
   gcloud secrets add-iam-policy-binding $s --member=serviceAccount:$SA --role=roles/secretmanager.secretAccessor
 done
 
@@ -136,7 +181,7 @@ gcloud run deploy couple-concierge \
   --allow-unauthenticated \
   --max-instances 1 --timeout 120 \
   --env-vars-file deploy/env.yaml \
-  --set-secrets ANTHROPIC_API_KEY=anthropic-api-key:latest,LINE_CHANNEL_SECRET=line-channel-secret:latest,LINE_CHANNEL_ACCESS_TOKEN=line-channel-access-token:latest,CRON_SECRET=cron-secret:latest
+  --set-secrets ANTHROPIC_API_KEY=anthropic-api-key:latest,LINE_CHANNEL_SECRET=line-channel-secret:latest,LINE_CHANNEL_ACCESS_TOKEN=line-channel-access-token:latest
 ```
 
 - Cloud Run ではサービスアカウントがそのまま使われるので、鍵ファイルは要りません。
@@ -149,38 +194,23 @@ gcloud run deploy couple-concierge \
 2. 夫婦それぞれがボットを友だち追加し、何か送る → **ユーザーID**（`U...`）が返ってくる（セットアップモード）
 3. `deploy/env.yaml` の `MEMBER1_LINE_USER_ID` / `MEMBER2_LINE_USER_ID` に入れ、`LINE_SETUP_MODE: "false"` にして、手順4の `gcloud run deploy` をもう一度実行
 
-これで完成です。LINEで「今週の予定は？」と送ってみてください。
-
-### 6. （任意）朝のお知らせ
-
-毎朝、今日と明日の予定をLINEに送ります。
-
-1. 送り先のIDを調べる: 1対1ならユーザーID、グループなら、そのグループで「ID」と送ると返ってくる「このトークのID」（`C...`）
-2. `deploy/env.yaml` の `DAILY_BRIEF_TO` に入れて再デプロイ
-3. Cloud Scheduler を設定
-
-```bash
-gcloud services enable cloudscheduler.googleapis.com
-URL=$(gcloud run services describe couple-concierge --region $REGION --format 'value(status.url)')
-gcloud scheduler jobs create http couple-daily-brief \
-  --location $REGION --schedule "0 7 * * *" --time-zone "Asia/Tokyo" \
-  --uri "$URL/tasks/daily-brief" --http-method POST \
-  --headers "X-Cron-Secret=$(gcloud secrets versions access latest --secret cron-secret)"
-```
+これで完成です。LINEで「今週の予定は？」と送ったり、お便りの写真を送ったりしてみてください。
 
 ---
 
 ## LINEでの使い方のコツ
 
 - 「私」「自分」は送った人のこと、と理解します。「ふたりで」「一緒に」は二人の予定になります。
+- 画像を送ったあとに「これは、はなこの予定」「年は来年」などと続けて送ると、登録した内容を直してくれます。
+- 文字の多いお便りは、紙全体がまっすぐ写るように撮ると読み取りが正確になります。
 - 話の流れは30分覚えています（「それ19時に変えて」が通じます）。話題を変えたいときは「リセット」と送ります。
 - 「ID」と送ると、自分のユーザーIDとトークのIDを返します。
 
 ## 料金の目安
 
-- **LINE**: 無料プランで使えます。コンシェルジュの返信（応答メッセージ）は無料の通数に数えられません。朝のお知らせはプッシュ送信なので数に入ります（無料プランは月200通。2人のグループに送ると1回で2通分）。
-- **Cloud Run / Secret Manager / Cloud Scheduler**: 夫婦で使う程度なら、ほぼ無料枠に収まります。
-- **Claude API**: やりとり1回ごとに使った分だけかかります。安くしたいときは `CLAUDE_EFFORT=low` にするか、`CLAUDE_MODEL` をより安いモデルに変えてください。
+- **LINE**: 無料プランで使えます。コンシェルジュの返事はすべて「返信」なので、月の通数に数えられません（返信が間に合わなかったときのプッシュだけが数に入ります）。
+- **Cloud Run / Secret Manager**: 夫婦で使う程度なら、ほぼ無料枠に収まります。
+- **Claude API**: やりとり1回ごとに使った分だけかかります。画像は文字だけより多めにかかります。安くしたいときは `CLAUDE_EFFORT=low` にするか、`CLAUDE_MODEL` をより安いモデルに変えてください。
 
 ## ファイル構成
 
@@ -191,6 +221,7 @@ couple-calendar/
 │   ├── gcal.py        Googleカレンダーの読み書き、担当者の判定、空き時間の計算
 │   ├── tools.py       カレンダー操作ツール（Claude Code と LINE で共通）
 │   ├── concierge.py   LINEのコンシェルジュ（Claude API + ツール）
+│   ├── images.py      LINEで受け取った画像の縮小・向きの補正
 │   ├── line_app.py    LINEのWebhookサーバー（FastAPI）
 │   └── mcp_server.py  Claude Code用のMCPサーバー
 ├── tests/             テスト（Googleカレンダー・Claude API・LINEはモックで確認）
@@ -213,4 +244,6 @@ uv run --extra dev pytest
 | 「予定が見つかりませんでした」 | `GOOGLE_CALENDAR_ID` が共有カレンダーのIDになっているか（`primary` などではなく） |
 | LINEで返事がない | Webhookがオンか、応答メッセージがオフか、`MEMBERx_LINE_USER_ID` が正しいか。Cloud Run のログを確認 |
 | グループで返事がない | 「コンシェルジュ、〜」で始めるか、ボットをメンションしているか |
+| グループで画像を読んでくれない | 画像を送ってから15分以内に呼びかけているか（画像だけでは反応しません） |
+| Claude Code で「まだ設定されていません」と出る | `couple-calendar/.env` を作り、`GOOGLE_CALENDAR_ID` などを入れたか |
 | 個人カレンダーの空き時間が反映されない | 個人カレンダーをサービスアカウントに共有したか（返信に「参照できませんでした」と出ます） |

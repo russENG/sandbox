@@ -157,3 +157,23 @@ def test_unfinished_turn_resets_session(settings, calendar, stop_reason):
     concierge = Concierge(settings, calendar, client=fake.client())
     concierge.reply("chat", "たろう", "こんにちは")
     assert "chat" not in concierge._sessions
+
+
+def test_images_are_sent_before_the_text(settings, calendar):
+    from couple_calendar.concierge import IMAGE_ONLY_TEXT
+    from couple_calendar.images import ImageInput
+
+    fake = FakeAnthropic([_message("msg_1", [{"type": "text", "text": "読み取りました"}], "end_turn")])
+    concierge = Concierge(settings, calendar, client=fake.client())
+    image = ImageInput("image/png", "aGVsbG8=")
+    concierge.reply("U_taro", "たろう", None, [image])
+    content = fake.requests[0]["messages"][-1]["content"]
+    assert content[0] == {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aGVsbG8="}}
+    assert content[1]["type"] == "text"
+    assert content[1]["text"].endswith(IMAGE_ONLY_TEXT)
+    assert "発言者: たろう" in content[1]["text"]
+
+
+def test_system_prompt_covers_images_and_duplicates(settings, calendar):
+    concierge = Concierge(settings, calendar, client=FakeAnthropic([]).client())
+    assert "画像" in concierge.system and "二重に登録しない" in concierge.system

@@ -30,8 +30,6 @@ def make_settings(**overrides) -> Settings:
         line_channel_access_token="line-token",
         line_setup_mode=False,
         group_trigger_words=("コンシェルジュ",),
-        daily_brief_to=("G_group",),
-        cron_secret="cron-secret",
         mcp_user_name="たろう",
     )
     values.update(overrides)

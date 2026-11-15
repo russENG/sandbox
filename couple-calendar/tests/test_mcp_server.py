@@ -37,3 +37,11 @@ def test_instructions_mention_the_user(settings):
     text = build_instructions(settings)
     assert "たろうさんとはなこさん" in text
     assert "利用者はたろうさん" in text
+
+
+def test_setup_server_explains_missing_config():
+    from couple_calendar.mcp_server import create_setup_server
+
+    server = create_setup_server("GOOGLE_CALENDAR_ID が設定されていません。")
+    with pytest.raises(ToolError, match="まだ設定されていません"):
+        asyncio.run(server.call_tool("get_calendar_info", {}))

@@ -42,8 +42,6 @@ class Settings:
     line_channel_access_token: str | None
     line_setup_mode: bool
     group_trigger_words: tuple[str, ...]
-    daily_brief_to: tuple[str, ...]
-    cron_secret: str | None
     mcp_user_name: str | None
 
     def member_by_key(self, key: str) -> Member | None:
@@ -119,8 +117,6 @@ def load_settings() -> Settings:
         line_channel_access_token=_env("LINE_CHANNEL_ACCESS_TOKEN"),
         line_setup_mode=(_env("LINE_SETUP_MODE", "false") or "").lower() in ("1", "true", "yes"),
         group_trigger_words=_env_list("GROUP_TRIGGER_WORDS") or ("コンシェルジュ",),
-        daily_brief_to=_env_list("DAILY_BRIEF_TO"),
-        cron_secret=_env("CRON_SECRET"),
         mcp_user_name=_env("MCP_USER_NAME"),
     )
 

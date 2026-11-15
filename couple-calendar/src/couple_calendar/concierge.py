@@ -10,19 +10,20 @@ import logging
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Sequence
 
 import anthropic
 from anthropic import beta_tool
 
 from .config import Settings
 from .gcal import CoupleCalendar, weekday_ja
+from .images import ImageInput
 from .tools import build_tools
 
 log = logging.getLogger(__name__)
 
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
-MAX_TOOL_ITERATIONS = 10
+MAX_TOOL_ITERATIONS = 15
 
 SYSTEM_TEMPLATE = """\
 あなたは{m1}さんと{m2}さんの夫婦専属のスケジュール・コンシェルジュです。LINEで二人と会話しながら、夫婦の共有Googleカレンダーを管理します。
@@ -38,6 +39,16 @@ SYSTEM_TEMPLATE = """\
 - 「空いてる日」「いつなら会える」などの相談には find_free_time を使ってください。
 - ツールがエラーを返したら、内容を分かりやすく伝え、必要なら言い直しをお願いしてください。
 
+# 画像やお知らせの文章から予定を入れる
+画像（学校や園のお便り、チラシ、招待状、予約完了画面のスクリーンショット、手書きのメモなど）や、予定が書かれた文章（メールやメッセージの転送など）が送られてきたら、次のようにしてください。
+- 書かれている予定を読み取り、日付・時刻・タイトル・場所を拾ってカレンダーに登録します。持ち物や締め切りなど、予定に関わる大事な情報はメモに入れます。
+- 年が書かれていない日付は、現在日時から見て一番近い未来の日付とみなします。
+- 登録する前に、同じ日の予定を list_events で確かめ、同じ予定がすでにあれば二重に登録しないでください。
+- 日付や時刻が読み取れない・判断に迷うものは登録せず、何が分からないかを聞いてください。読み取れたものだけ先に登録して構いません。
+- 予定がいくつも書かれているお便りでも、すべて登録して構いません。ただし、自分たちに関係しないことがはっきりしている項目（別の学年向けなど）は外し、外したことを伝えてください。
+- 予定と関係のない画像なら、ひとことで感想を返し、予定にしたいものがあれば教えてほしいと伝えてください。
+- 登録したら、何を登録したかを一覧で返し、「違うところがあれば教えてください」と添えてください。
+
 # 返信のスタイル
 - LINEのトークで読まれるので、短く、やわらかい丁寧語で書いてください。
 - Markdown（#、**、表、コードブロック）は使わず、必要なら「・」の箇条書きと改行だけを使ってください。
@@ -47,13 +58,11 @@ SYSTEM_TEMPLATE = """\
 - カレンダー以外の雑談には、ひとことで感じよく応じてください。
 """
 
-DAILY_BRIEF_PROMPT = (
-    "朝のお知らせを作ってください。今日と明日の予定を list_events で確認し、"
-    "あいさつに続けて二人の予定を短くまとめてください。予定がなければ、その旨とひとことを添えてください。"
-)
+IMAGE_ONLY_TEXT = "画像を送ります。予定が書かれていたら、カレンダーに登録してください。"
 
 ERROR_REPLY = "ごめんなさい、うまく処理できませんでした。少し時間をおいて、もう一度送ってみてください。"
 REFUSAL_REPLY = "ごめんなさい、その内容にはお答えできません。予定のことなら何でも聞いてください。"
+BUSY_REPLY = "いま混み合っています。1分ほどおいて、もう一度送ってみてください。"
 
 
 def build_system_prompt(settings: Settings) -> str:
@@ -124,9 +133,9 @@ class Concierge:
     def _header(self, now: datetime, speaker: str | None) -> str:
         return f"[現在日時: {now:%Y-%m-%d}({weekday_ja(now.date())}) {now:%H:%M} / 発言者: {speaker or '不明'}]"
 
-    def _run(self, thread: Any, text: str) -> tuple[str, bool]:
+    def _run(self, thread: Any, content: str | list[dict]) -> tuple[str, bool]:
         """1ターン実行して (返信テキスト, この会話を続けてよいか) を返す。"""
-        thread.append({"role": "user", "content": text})
+        thread.append({"role": "user", "content": content})
         final = thread.tool_runner(max_iterations=MAX_TOOL_ITERATIONS).until_done()
         if final.stop_reason == "refusal":
             return REFUSAL_REPLY, False
@@ -135,16 +144,28 @@ class Concierge:
         healthy = final.stop_reason in ("end_turn", "stop_sequence")
         return reply or ERROR_REPLY, healthy
 
-    def reply(self, chat_id: str, speaker: str | None, text: str) -> str:
+    def reply(
+        self,
+        chat_id: str,
+        speaker: str | None,
+        text: str | None,
+        images: Sequence[ImageInput] = (),
+    ) -> str:
+        """発言（テキストと画像）に返信する。画像だけのときは、予定を読み取って登録するよう頼む。"""
         now = self.calendar.now()
+        body = (text or "").strip() or (IMAGE_ONLY_TEXT if images else "こんにちは")
+        message = f"{self._header(now, speaker)}\n{body}"
+        content: str | list[dict] = (
+            [*(img.to_block() for img in images), {"type": "text", "text": message}] if images else message
+        )
         session = self._session(chat_id, now)
         with session.lock:
             try:
-                answer, healthy = self._run(session.thread, f"{self._header(now, speaker)}\n{text}")
+                answer, healthy = self._run(session.thread, content)
             except anthropic.RateLimitError:
                 log.warning("Claude API のレート制限に当たりました")
                 self.reset(chat_id)
-                return "いま混み合っています。1分ほどおいて、もう一度送ってみてください。"
+                return BUSY_REPLY
             except Exception:
                 # 途中で失敗した会話は続きから再開できないので、作り直す
                 log.exception("コンシェルジュの応答に失敗しました")
@@ -153,10 +174,4 @@ class Concierge:
             session.last_used = now
         if not healthy:
             self.reset(chat_id)
-        return answer
-
-    def daily_brief(self) -> str:
-        """朝のお知らせ文を作る（チャットの会話履歴とは別の、使い捨ての会話）。"""
-        now = self.calendar.now()
-        answer, _ = self._run(self._new_thread(), f"{self._header(now, 'システム（定時のお知らせ）')}\n{DAILY_BRIEF_PROMPT}")
         return answer

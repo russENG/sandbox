@@ -53,8 +53,25 @@ def create_server(settings: Settings | None = None, calendar: CoupleCalendar | N
     return server
 
 
+def create_setup_server(reason: str) -> MCPServer:
+    """設定が足りないときの代わりのサーバー。起動に失敗して「接続できない」となる代わりに、何を設定すればよいかを返す。"""
+    message = f"夫婦カレンダーはまだ設定されていません: {reason}（couple-calendar/.env を作成してください。手順は README.md）"
+    server = MCPServer("couple-calendar", instructions=message)
+
+    def get_calendar_info() -> str:
+        """共有カレンダーの基本情報を返す（未設定のため、設定方法を返す）。"""
+        raise ToolError(message)
+
+    server.add_tool(get_calendar_info)
+    return server
+
+
 def main() -> None:
-    create_server().run()  # stdio
+    try:
+        server = create_server()
+    except RuntimeError as e:
+        server = create_setup_server(str(e))
+    server.run()  # stdio
 
 
 if __name__ == "__main__":
