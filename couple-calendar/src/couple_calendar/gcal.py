@@ -17,6 +17,7 @@ from .config import BOTH, Member, Settings
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 OWNER_PROP = "coupleOwner"
 WORK_PROP = "workEventId"  # 仕事のカレンダーから写した予定の、元の予定ID
+WORK_MEMBER_PROP = "workMember"  # どのメンバーの仕事のカレンダーから写したか
 WEEKDAYS = "月火水木金土日"
 MAX_EVENTS = 500
 
@@ -231,8 +232,10 @@ class CoupleCalendar:
             out["recurring"] = True
         if event.get("transparency") == "transparent":
             out["busy"] = False
-        if ((event.get("extendedProperties") or {}).get("private") or {}).get(WORK_PROP):
+        work_event_id = ((event.get("extendedProperties") or {}).get("private") or {}).get(WORK_PROP)
+        if work_event_id:
             out["from_work"] = True
+            out["work_event_id"] = work_event_id
         return out
 
     # ------------------------------------------------------------------ 操作
@@ -290,6 +293,37 @@ class CoupleCalendar:
         )
         return [ev for ev in events if not declined(ev)]
 
+    def work_copies(self, start: date, end: date) -> list[dict]:
+        """共有カレンダーにある、仕事のカレンダーから写した予定。"""
+        return [
+            ev
+            for ev in self.list_events(start, end)
+            if ((ev.get("extendedProperties") or {}).get("private") or {}).get(WORK_PROP)
+        ]
+
+    def copy_source(self, copy: dict) -> tuple[Member | None, str]:
+        """写した予定の、元のメンバーと元の予定ID。"""
+        private = (copy.get("extendedProperties") or {}).get("private") or {}
+        member = self.settings.member_by_key(private.get(WORK_MEMBER_PROP) or private.get(OWNER_PROP) or "")
+        return member, private[WORK_PROP]
+
+    def get_work_event(self, member: Member, work_event_id: str) -> dict | None:
+        """仕事のカレンダーの元の予定。消されている・取り消された・欠席と答えたときは None。"""
+        from googleapiclient.errors import HttpError
+
+        try:
+            event = self._events().get(calendarId=member.work_calendar_id, eventId=work_event_id).execute()
+        except HttpError as e:
+            status = getattr(e, "status_code", None) or getattr(getattr(e, "resp", None), "status", None)
+            if status in (404, 410):
+                return None
+            raise CalendarError(f"{member.name}さんの仕事のカレンダーを読めませんでした（{status}）。") from e
+        if event.get("status") == "cancelled":
+            return None
+        if any(a.get("self") and a.get("responseStatus") == "declined" for a in event.get("attendees", [])):
+            return None
+        return event
+
     def find_copied_work_event(self, work_event_id: str) -> dict | None:
         """仕事のカレンダーから写した予定を、元の予定IDで探す（二重登録を防ぐため）。"""
         resp = self._execute(
@@ -325,6 +359,8 @@ class CoupleCalendar:
         private = {OWNER_PROP: owner_key}
         if work_event_id:
             private[WORK_PROP] = work_event_id
+            if owner_key != BOTH:
+                private[WORK_MEMBER_PROP] = owner_key
         body: dict[str, Any] = {
             "summary": title.strip(),
             "colorId": self.color_for(owner_key),

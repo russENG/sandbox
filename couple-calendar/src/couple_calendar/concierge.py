@@ -180,3 +180,12 @@ class Concierge:
         if not healthy:
             self.reset(chat_id)
         return answer
+
+    def run_task(self, instruction: str, speaker: str = "システム（自動処理）") -> str:
+        """チャットの会話とは別の、使い捨ての会話で1回だけ作業を頼む（自動取り込みなど）。
+
+        失敗したときは例外をそのまま投げる（呼び出し元で再試行・記録するため）。
+        """
+        now = self.calendar.now()
+        answer, _ = self._run(self._new_thread(), f"{self._header(now, speaker)}\n{instruction}")
+        return answer

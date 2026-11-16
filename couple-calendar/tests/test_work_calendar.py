@@ -77,11 +77,12 @@ def test_copying_the_same_trip_twice_updates_instead_of_duplicating(tools, servi
     assert second["updated_existing"]["end"] == "2026-11-26"
     assert len(service.store) == 1
     [event] = service.store.values()
-    assert event["extendedProperties"]["private"] == {"coupleOwner": "member1", "workEventId": "w1"}
+    assert event["extendedProperties"]["private"] == {"coupleOwner": "member1", "workEventId": "w1", "workMember": "member1"}
     assert "transparency" not in event  # 出張は空き時間検索で「ふさがっている」扱い
 
     listed = json.loads(tools["list_events"](start_date="2026-11-24", end_date="2026-11-24"))
     assert listed["events"][0]["from_work"] is True
+    assert listed["events"][0]["work_event_id"] == "w1"
 
 
 def test_free_time_considers_work_calendar(tools, service):

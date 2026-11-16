@@ -21,6 +21,7 @@ dev = ["pytest>=8", "httpx>=0.27"]
 
 [project.scripts]
 couple-calendar-mcp = "couple_calendar.mcp_server:main"
+couple-calendar-sync = "couple_calendar.work_sync:main"
 
 [build-system]
 requires = ["hatchling"]

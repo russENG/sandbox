@@ -1,8 +1,9 @@
 """LINE Messaging API の Webhook サーバー（Cloud Run などで動かす）。
 
 エンドポイント:
-  POST /callback  LINE からの Webhook（署名を検証する）
-  GET  /healthz   ヘルスチェック
+  POST /callback                LINE からの Webhook（署名を検証する）
+  POST /tasks/sync-work-trips   仕事のカレンダーの出張・移動を取り込む（Cloud Scheduler から X-Cron-Secret 付きで呼ぶ）
+  GET  /healthz                 ヘルスチェック
 
 テキストと画像のメッセージを受け付ける。
   - 1:1 トーク: 送られたテキスト・画像にそのまま応答する。画像を複数枚まとめて送ったときは、全部そろってから1回で読む
@@ -12,6 +13,7 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 import threading
 import time
@@ -48,6 +50,7 @@ from .concierge import IMAGE_ONLY_TEXT, Concierge
 from .config import Member, Settings, get_settings
 from .gcal import CoupleCalendar
 from .images import ImageInput, prepare_image
+from .work_sync import WorkTripSync, build_sync
 
 log = logging.getLogger(__name__)
 
@@ -355,16 +358,34 @@ def _default_bot() -> LineBot:
     return LineBot(settings, Concierge(settings, calendar))
 
 
-def create_app(bot_factory: Callable[[], LineBot] = _default_bot) -> FastAPI:
+def create_app(
+    bot_factory: Callable[[], LineBot] = _default_bot,
+    sync_factory: Callable[[], WorkTripSync] = build_sync,
+) -> FastAPI:
     app = FastAPI(title="Couple Calendar Concierge")
-    state: dict[str, LineBot] = {}
+    state: dict[str, object] = {}
     lock = threading.Lock()
+    sync_lock = threading.Lock()
 
     def get_bot() -> LineBot:
         with lock:
             if "bot" not in state:
                 state["bot"] = bot_factory()
-            return state["bot"]
+            return state["bot"]  # type: ignore[return-value]
+
+    def get_sync() -> WorkTripSync:
+        with lock:
+            if "sync" not in state:
+                state["sync"] = sync_factory()
+            return state["sync"]  # type: ignore[return-value]
+
+    def run_sync(sync: WorkTripSync) -> dict:
+        if not sync_lock.acquire(blocking=False):
+            raise HTTPException(status_code=409, detail="already running")
+        try:
+            return sync.run().to_dict()
+        finally:
+            sync_lock.release()
 
     @app.get("/healthz")
     def healthz() -> PlainTextResponse:
@@ -382,6 +403,15 @@ def create_app(bot_factory: Callable[[], LineBot] = _default_bot) -> FastAPI:
         # LINE の返信トークンは使い切りなので、返信を送り終えてから 200 を返す
         await run_in_threadpool(bot.handle_events, events)
         return PlainTextResponse("OK")
+
+    @app.post("/tasks/sync-work-trips")
+    async def sync_work_trips(request: Request) -> dict:
+        sync = get_sync()
+        secret = sync.settings.cron_secret
+        given = request.headers.get("x-cron-secret", "")
+        if not secret or not hmac.compare_digest(given.encode(), secret.encode()):
+            raise HTTPException(status_code=403, detail="forbidden")
+        return await run_in_threadpool(run_sync, sync)
 
     return app
 

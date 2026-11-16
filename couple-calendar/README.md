@@ -25,7 +25,7 @@
 | 空き時間探し | 「来週、ふたりとも空いてる夜は？」（各自の個人カレンダーも見られます） |
 | 画像から登録 | 学校のお便り・チラシ・招待状・予約完了画面のスクショを送ると、日時を読み取って登録 |
 | 文章から登録 | 予定が書かれたメールやメッセージを貼り付けて送ると、そこから登録 |
-| 仕事の出張・移動 | 「仕事の出張を入れて」で、仕事のカレンダーから出張・移動だけを写す（任意） |
+| 仕事の出張・移動 | 仕事のカレンダーから出張・移動だけを3日に1回自動で写す。「仕事の出張を入れて」と頼めばすぐ写す（任意） |
 
 予定には **担当者**（夫・妻・ふたり）が付きます。担当者ごとに予定の色が変わるので、カレンダーアプリでもひと目で分かります。カレンダーアプリから直接入れた予定も、色か作成者のアカウントで担当者を見分けます。
 
@@ -131,6 +131,7 @@ echo $SA   # このメールアドレスを次の手順で使う
 - 取引先名や会議の中身は書かず、「出張（大阪）」「移動（東京→新大阪）」のように写します。
 - 同じ出張をもう一度写すと、新しく作らずに上書きします。日程が変わったら、もう一度頼めば直ります。
 - 空き時間探しでも、仕事の予定で埋まっている時間を考慮します。
+- 手順6を設定すると、3日に1回自動で取り込みます。
 
 ### 2. Claude Code から使う
 
@@ -188,7 +189,8 @@ gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregi
 printf '%s' 'sk-ant-...'               | gcloud secrets create anthropic-api-key --data-file=-
 printf '%s' 'チャネルシークレット'        | gcloud secrets create line-channel-secret --data-file=-
 printf '%s' 'チャネルアクセストークン'    | gcloud secrets create line-channel-access-token --data-file=-
-for s in anthropic-api-key line-channel-secret line-channel-access-token; do
+printf '%s' "$(openssl rand -hex 24)"  | gcloud secrets create cron-secret --data-file=-   # 自動取り込み用の合言葉
+for s in anthropic-api-key line-channel-secret line-channel-access-token cron-secret; do
   gcloud secrets add-iam-policy-binding $s --member=serviceAccount:$SA --role=roles/secretmanager.secretAccessor
 done
 
@@ -199,9 +201,9 @@ gcloud run deploy couple-concierge \
   --source . --region $REGION \
   --service-account $SA \
   --allow-unauthenticated \
-  --max-instances 1 --timeout 120 \
+  --max-instances 1 --timeout 600 \
   --env-vars-file deploy/env.yaml \
-  --set-secrets ANTHROPIC_API_KEY=anthropic-api-key:latest,LINE_CHANNEL_SECRET=line-channel-secret:latest,LINE_CHANNEL_ACCESS_TOKEN=line-channel-access-token:latest
+  --set-secrets ANTHROPIC_API_KEY=anthropic-api-key:latest,LINE_CHANNEL_SECRET=line-channel-secret:latest,LINE_CHANNEL_ACCESS_TOKEN=line-channel-access-token:latest,CRON_SECRET=cron-secret:latest
 ```
 
 - Cloud Run ではサービスアカウントがそのまま使われるので、鍵ファイルは要りません。
@@ -216,6 +218,33 @@ gcloud run deploy couple-concierge \
 
 これで完成です。LINEで「今週の予定は？」と送ったり、お便りの写真を送ったりしてみてください。
 
+### 6. （任意）仕事のカレンダーを3日に1回自動で取り込む
+
+手順1-4で仕事のカレンダーを設定していれば、Cloud Scheduler から3日に1回、出張・移動を自動で取り込めます。LINEには何も送らず、カレンダーに反映するだけです。
+
+1回ごとに、次の2つを行います。
+
+- **片付け**: 写した予定のうち、仕事のカレンダーで消された・取り消された・欠席にした・8週間より先へ延期されたものを削除する（プログラムで確実に行う）
+- **取り込み**: 今日から8週間先までの仕事の予定を読み、出張・移動を写す。前に写したものは、日時や行き先が変わったときだけ上書きする（Claudeが判断。自動なので質問はせず、迷うものは写さない）
+
+```bash
+gcloud services enable cloudscheduler.googleapis.com
+URL=$(gcloud run services describe couple-concierge --region $REGION --format 'value(status.url)')
+gcloud scheduler jobs create http couple-work-trips \
+  --location $REGION --schedule "0 6 */3 * *" --time-zone "Asia/Tokyo" \
+  --uri "$URL/tasks/sync-work-trips" --http-method POST \
+  --headers "X-Cron-Secret=$(gcloud secrets versions access latest --secret cron-secret)" \
+  --attempt-deadline 600s
+
+# すぐに1回動かして確かめる
+gcloud scheduler jobs run couple-work-trips --location $REGION
+```
+
+- `0 6 */3 * *` は「毎月1日・4日・7日…28日（31日まである月は31日も）の朝6時」です。月をまたぐときだけ、間が1〜2日になることがあります。
+- 結果は Cloud Run のログに「仕事のカレンダーの自動取り込み」として残ります。
+- 手元で1回だけ試すときは `uv run couple-calendar-sync`（`.env` に `ANTHROPIC_API_KEY` が必要）。
+- 見る期間は `WORK_SYNC_DAYS`（日数、既定56日＝8週間）で変えられます。
+
 ---
 
 ## LINEでの使い方のコツ
@@ -229,8 +258,8 @@ gcloud run deploy couple-concierge \
 ## 料金の目安
 
 - **LINE**: 無料プランで使えます。コンシェルジュの返事はすべて「返信」なので、月の通数に数えられません（返信が間に合わなかったときのプッシュだけが数に入ります）。
-- **Cloud Run / Secret Manager**: 夫婦で使う程度なら、ほぼ無料枠に収まります。
-- **Claude API**: やりとり1回ごとに使った分だけかかります。画像は文字だけより多めにかかります。安くしたいときは `CLAUDE_EFFORT=low` にするか、`CLAUDE_MODEL` をより安いモデルに変えてください。
+- **Cloud Run / Secret Manager / Cloud Scheduler**: 夫婦で使う程度なら、ほぼ無料枠に収まります（Cloud Scheduler は3ジョブまで無料）。
+- **Claude API**: やりとり1回ごとに使った分だけかかります。画像は文字だけより多めにかかります。仕事のカレンダーの自動取り込みも、3日に1回その分がかかります。安くしたいときは `CLAUDE_EFFORT=low` にするか、`CLAUDE_MODEL` をより安いモデルに変えてください。
 
 ## ファイル構成
 
@@ -243,7 +272,8 @@ couple-calendar/
 │   ├── concierge.py   LINEのコンシェルジュ（Claude API + ツール）
 │   ├── images.py      LINEで受け取った画像の縮小・向きの補正
 │   ├── line_app.py    LINEのWebhookサーバー（FastAPI）
-│   └── mcp_server.py  Claude Code用のMCPサーバー
+│   ├── mcp_server.py  Claude Code用のMCPサーバー
+│   └── work_sync.py   仕事のカレンダーの自動取り込み（3日に1回）
 ├── tests/             テスト（Googleカレンダー・Claude API・LINEはモックで確認）
 ├── deploy/env.example.yaml
 ├── Dockerfile

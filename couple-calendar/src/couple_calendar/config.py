@@ -44,6 +44,8 @@ class Settings:
     line_setup_mode: bool
     group_trigger_words: tuple[str, ...]
     mcp_user_name: str | None
+    cron_secret: str | None = None  # 自動取り込みの呼び出し用の合言葉
+    work_sync_days: int = 56  # 自動取り込みで先まで見る日数
 
     def member_by_key(self, key: str) -> Member | None:
         return next((m for m in self.members if m.key == key), None)
@@ -119,6 +121,8 @@ def load_settings() -> Settings:
         line_channel_access_token=_env("LINE_CHANNEL_ACCESS_TOKEN"),
         line_setup_mode=(_env("LINE_SETUP_MODE", "false") or "").lower() in ("1", "true", "yes"),
         group_trigger_words=_env_list("GROUP_TRIGGER_WORDS") or ("コンシェルジュ",),
+        cron_secret=_env("CRON_SECRET"),
+        work_sync_days=int(_env("WORK_SYNC_DAYS", "56")),
         mcp_user_name=_env("MCP_USER_NAME"),
     )
 
