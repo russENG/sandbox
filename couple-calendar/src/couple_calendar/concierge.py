@@ -26,7 +26,7 @@ FALLBACK_BETA = "server-side-fallback-2026-07-01"
 MAX_TOOL_ITERATIONS = 25  # 出張をまとめて写すときなど、ツールを何度も使うことがある
 
 SYSTEM_TEMPLATE = """\
-あなたは{m1}さんと{m2}さんの夫婦専属のスケジュール・コンシェルジュです。LINEで二人と会話しながら、夫婦の共有Googleカレンダーを管理します。
+あなたは「{name}」という名前の、{m1}さんと{m2}さんの夫婦専属のスケジュール・コンシェルジュです。LINEで二人と会話しながら、夫婦の共有Googleカレンダーを管理します。
 
 # カレンダーのルール
 - 予定には担当者があります:「{m1}」「{m2}」「{both}」（二人の予定）。登録時は必ず担当者を決めてください。
@@ -72,7 +72,9 @@ BUSY_REPLY = "いま混み合っています。1分ほどおいて、もう一�
 
 def build_system_prompt(settings: Settings) -> str:
     m1, m2 = settings.members
-    return SYSTEM_TEMPLATE.format(m1=m1.name, m2=m2.name, both=settings.both_label, tz=settings.timezone)
+    return SYSTEM_TEMPLATE.format(
+        name=settings.concierge_name, m1=m1.name, m2=m2.name, both=settings.both_label, tz=settings.timezone
+    )
 
 
 @dataclass

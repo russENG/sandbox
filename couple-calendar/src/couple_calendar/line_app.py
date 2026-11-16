@@ -7,8 +7,8 @@
 
 テキストと画像のメッセージを受け付ける。
   - 1:1 トーク: 送られたテキスト・画像にそのまま応答する。画像を複数枚まとめて送ったときは、全部そろってから1回で読む
-  - グループ   : 呼びかけ（「コンシェルジュ、〜」かメンション）にだけ応答する。グループに送られた画像は少しの間覚えておき、
-                 次の呼びかけ（「コンシェルジュ、これ入れて」など）と一緒に読む
+  - グループ   : 呼びかけ（「りまいんたろう、〜」かメンション）にだけ応答する。グループに送られた画像は少しの間覚えておき、
+                 次の呼びかけ（「りまいんたろう、これ入れて」など）と一緒に読む
 """
 
 from __future__ import annotations
@@ -60,6 +60,8 @@ MAX_IMAGES_PER_TURN = 10
 IMAGE_SET_TTL = 10 * 60  # まとめ送りの画像がそろうのを待つ時間（秒）
 GROUP_IMAGE_TTL = 15 * 60  # グループの画像を覚えておく時間（秒）
 MAX_GROUP_IMAGES = 4
+HONORIFICS = ("さん", "くん", "君", "ちゃん", "様")
+SEPARATORS = " 、,，:：　!！"
 
 
 def split_for_line(text: str, limit: int = LINE_TEXT_LIMIT - 100) -> list[str]:
@@ -203,9 +205,15 @@ class LineBot:
                 text = _remove_span(text, m.index, m.length)
             return text.strip()
         stripped = text.strip()
-        for word in self.settings.group_trigger_words:
+        # 「りまいん」と「りまいんたろう」の両方があるときに備え、長い呼び方から順に試す
+        for word in sorted(self.settings.group_trigger_words, key=len, reverse=True):
             if stripped.startswith(word):
-                return stripped[len(word) :].lstrip(" 、,:：　").strip()
+                rest = stripped[len(word) :]
+                for honorific in HONORIFICS:  # 「りまいんたろうさん、〜」も呼びかけとして扱う
+                    if rest.startswith(honorific):
+                        rest = rest[len(honorific) :]
+                        break
+                return rest.lstrip(SEPARATORS).strip()
         return None
 
     def handle_events(self, events: list) -> None:

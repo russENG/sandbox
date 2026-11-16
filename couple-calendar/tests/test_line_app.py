@@ -166,7 +166,7 @@ def test_group_needs_trigger_word_or_mention(setup):
     _post(client, [text_event("今日の夕飯どうする？", GROUP, event_id="a")])
     assert concierge.calls == []
 
-    _post(client, [text_event("コンシェルジュ、今週の予定は？", GROUP, event_id="b")])
+    _post(client, [text_event("りまいんたろう、今週の予定は？", GROUP, event_id="b")])
     mention = {"mentionees": [{"index": 0, "length": 7, "type": "user", "userId": "Ubot", "isSelf": True}]}
     _post(client, [text_event("@カレンダー係 土曜空いてる？", GROUP, event_id="c", mention=mention)])
     assert [(c["chat"], c["speaker"], c["text"]) for c in concierge.calls] == [
@@ -246,14 +246,14 @@ def test_group_image_waits_for_a_call(setup):
     _post(client, [image_event("flyer", GROUP)])
     assert concierge.calls == [] and bot.replies == []  # グループの画像には反応しない
 
-    _post(client, [text_event("コンシェルジュ、これ入れておいて", GROUP, event_id="t1")])
+    _post(client, [text_event("りまいんたろう、これ入れておいて", GROUP, event_id="t1")])
     call = concierge.calls[0]
     assert len(call["images"]) == 1
     assert call["text"].startswith("これ入れておいて")
     assert "画像を1枚添付" in call["text"]
 
     # 一度使った画像は次の呼びかけには付かない
-    _post(client, [text_event("コンシェルジュ、明日は？", GROUP, event_id="t2")])
+    _post(client, [text_event("りまいんたろう、明日は？", GROUP, event_id="t2")])
     assert concierge.calls[1]["images"] == [] and concierge.calls[1]["text"] == "明日は？"
 
 
@@ -262,7 +262,7 @@ def test_group_images_expire(setup):
     bot.contents["old"] = _png()
     _post(client, [image_event("old", GROUP)])
     clock.now += GROUP_IMAGE_TTL + 1
-    _post(client, [text_event("コンシェルジュ、これ入れて", GROUP, event_id="t")])
+    _post(client, [text_event("りまいんたろう、これ入れて", GROUP, event_id="t")])
     assert concierge.calls[0]["images"] == []
 
 
@@ -321,3 +321,10 @@ def test_end_to_end_image_to_calendar(settings, calendar, service):
     [event] = service.store.values()
     assert event["summary"] == "保護者会" and event["location"] == "体育館"
     assert bot.replies == [("rt-ev-notice", "12/5(土) 10:00〜11:30 保護者会【ふたり】を登録しました。")]
+
+
+def test_group_call_with_honorific_and_short_name(setup):
+    bot, concierge, client, _ = setup(group_trigger_words=("りまいん", "りまいんたろう"))
+    _post(client, [text_event("りまいんたろうさん、明日の予定は？", GROUP, event_id="h1")])
+    _post(client, [text_event("りまいん 土曜空いてる？", GROUP, event_id="h2")])
+    assert [c["text"] for c in concierge.calls] == ["明日の予定は？", "土曜空いてる？"]

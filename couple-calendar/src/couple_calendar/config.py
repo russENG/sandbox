@@ -46,6 +46,7 @@ class Settings:
     mcp_user_name: str | None
     cron_secret: str | None = None  # 自動取り込みの呼び出し用の合言葉
     work_sync_days: int = 56  # 自動取り込みで先まで見る日数
+    concierge_name: str = "りまいんたろう"  # LINE のコンシェルジュの名前（グループでの呼びかけにも使う）
 
     def member_by_key(self, key: str) -> Member | None:
         return next((m for m in self.members if m.key == key), None)
@@ -108,6 +109,7 @@ def load_settings() -> Settings:
         raise RuntimeError(
             "GOOGLE_CALENDAR_ID が設定されていません。共有カレンダーのカレンダーIDを .env か環境変数に設定してください。"
         )
+    concierge_name = _env("CONCIERGE_NAME", "りまいんたろう")
     return Settings(
         calendar_id=calendar_id,
         timezone=_env("TIMEZONE", "Asia/Tokyo"),
@@ -120,9 +122,10 @@ def load_settings() -> Settings:
         line_channel_secret=_env("LINE_CHANNEL_SECRET"),
         line_channel_access_token=_env("LINE_CHANNEL_ACCESS_TOKEN"),
         line_setup_mode=(_env("LINE_SETUP_MODE", "false") or "").lower() in ("1", "true", "yes"),
-        group_trigger_words=_env_list("GROUP_TRIGGER_WORDS") or ("コンシェルジュ",),
+        group_trigger_words=_env_list("GROUP_TRIGGER_WORDS") or (concierge_name,),
         cron_secret=_env("CRON_SECRET"),
         work_sync_days=int(_env("WORK_SYNC_DAYS", "56")),
+        concierge_name=concierge_name,
         mcp_user_name=_env("MCP_USER_NAME"),
     )
 

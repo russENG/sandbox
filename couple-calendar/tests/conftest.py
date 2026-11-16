@@ -29,7 +29,7 @@ def make_settings(**overrides) -> Settings:
         line_channel_secret="line-secret",
         line_channel_access_token="line-token",
         line_setup_mode=False,
-        group_trigger_words=("コンシェルジュ",),
+        group_trigger_words=("りまいんたろう",),
         mcp_user_name="たろう",
     )
     values.update(overrides)

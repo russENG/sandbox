@@ -183,3 +183,8 @@ def test_system_prompt_covers_work_calendar(settings, calendar):
     concierge = Concierge(settings, calendar, client=FakeAnthropic([]).client())
     assert "list_work_events" in concierge.system
     assert any(t.name == "list_work_events" for t in concierge.tools)
+
+
+def test_concierge_introduces_itself_by_name(settings, calendar):
+    concierge = Concierge(settings, calendar, client=FakeAnthropic([]).client())
+    assert concierge.system.startswith("あなたは「りまいんたろう」という名前の")
